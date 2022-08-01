@@ -16,8 +16,10 @@ device_id = "ede7914e-4055-4484-9652-da46802266c2"
 account_id = "ede7914e-4055-4484-9652-da46802266c2"
 provider_id = "fc397a41-7bc8-3fa3-971b-2686c0d77c2f"
 
+ten_megabytes = 10485760
+
 # The number of N40 Start/Update/Terminate sessions to iterate (sequentially)
-num_sessions = 1
+num_sessions = 100
 
 # The number of Update calls for each session
 updates_per_session = 5
@@ -93,11 +95,11 @@ async def update(token, location_header, seq_num):
         "subscriberIdentifier": device_id,
         "multipleUnitUsage": [
             {
-                "requestedUnit": {"totalVolume": 10857600},
+                "requestedUnit": {"totalVolume": ten_megabytes},
                 "usedUnitContainer": [
                     {
                         "localSequenceNumber": 1,
-                        "totalVolume": 0
+                        "totalVolume": ten_megabytes
                     }
                 ],
                 "ratingGroup": 300
@@ -287,7 +289,7 @@ async def main():
         print_array_summary("All Transactions", all_samples)
         print(f"Error count: {num_errors}")
         print(f"Error rate: {num_errors / len(all_samples)}")
-        print(f"Start balance = {start_balance}, End balance = {last_balance}, Delta = {last_balance - start_balance}")
+        print(f"Start balance = {start_balance}, End balance = {last_balance}, Delta = {start_balance - last_balance}")
         
 
 def print_array_summary(label, all_samples):
