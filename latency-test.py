@@ -1,21 +1,34 @@
 import asyncio
-from os import access
+from os import access, environ
+
 import time
+import json
 import httpx
 from datetime import datetime
+from gql import gql, Client
+from gql.transport.aiohttp import AIOHTTPTransport
 
 import numpy as np
 s = httpx.AsyncClient(http2=True, verify=False)
 
 base_url = "https://mwcl3useast1-lb-0-1783933148.us-east-1.elb.amazonaws.com"
+device_id = "ede7914e-4055-4484-9652-da46802266c2"
+account_id = "ede7914e-4055-4484-9652-da46802266c2"
+provider_id = "fc397a41-7bc8-3fa3-971b-2686c0d77c2f"
+
+# The number of N40 Start/Update/Terminate sessions to iterate (sequentially)
+num_sessions = 1
+
+# The number of Update calls for each session
+updates_per_session = 5
 
 async def get_token():
     url = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_us-east-1_bYrFO4DaR/"
 
     payload = {
         "AuthParameters": {
-            "USERNAME": "[infrastructure-username]",
-            "PASSWORD": "[infrastructure-password]"
+            "USERNAME": environ['TOTOGI_USERNAME'],
+            "PASSWORD": environ['TOTOGI_PASSWORD']
         },
         "AuthFlow": "USER_PASSWORD_AUTH",
         "ClientId": "3bsr3p2j5ffn1cf05knuqc03v2"
@@ -38,8 +51,8 @@ async def init(token):
     request_time = f"{datetime.now().isoformat()[:-3]}Z"
     payload = {
         "invocationSequenceNumber": 1,
-        "tenantIdentifier": "fc397a41-7bc8-3fa3-971b-2686c0d77c2f",
-        "subscriberIdentifier": "ede7914e-4055-4484-9652-da46802266c2",
+        "tenantIdentifier": provider_id,
+        "subscriberIdentifier": device_id,
         "multipleUnitUsage": [
             {
                 "requestedUnit": {"totalVolume": 300},
@@ -76,8 +89,8 @@ async def update(token, location_header, seq_num):
     request_time = f"{datetime.now().isoformat()[:-3]}Z"
     payload = {
         "invocationSequenceNumber": seq_num,
-        "tenantIdentifier": "fc397a41-7bc8-3fa3-971b-2686c0d77c2f",
-        "subscriberIdentifier": "ede7914e-4055-4484-9652-da46802266c2",
+        "tenantIdentifier": provider_id,
+        "subscriberIdentifier": device_id,
         "multipleUnitUsage": [
             {
                 "requestedUnit": {"totalVolume": 10857600},
@@ -119,8 +132,8 @@ async def terminate(token, location_header, seq_num):
     request_time = f"{datetime.now().isoformat()[:-3]}Z"
     payload = {
         "invocationSequenceNumber": seq_num,
-        "tenantIdentifier": "fc397a41-7bc8-3fa3-971b-2686c0d77c2f",
-        "subscriberIdentifier": "ede7914e-4055-4484-9652-da46802266c2",
+        "tenantIdentifier": provider_id,
+        "subscriberIdentifier": device_id,
         "multipleUnitUsage": [
             {
                 "usedUnitContainer": [
@@ -153,8 +166,77 @@ async def terminate(token, location_header, seq_num):
     print(f'{response.status_code}: {response.text}')
     return response.status_code
 
-num_sessions = 1000
-updates_per_session = 5
+def get_gql_client(token):
+    # Select your transport with a defined url endpoint
+    gql_transport = AIOHTTPTransport(url="https://api.produseast1.totogi.app/graphql",
+        headers={"Authorization": f"{token}"})
+
+    # Create a GraphQL client using the defined transport
+    gql_client = Client(transport=gql_transport, fetch_schema_from_transport=True)
+    return gql_client
+
+async def get_balance(gql_client):
+    query = gql(
+        """
+        query GetAccount(
+                $providerId: ID!,
+                $accountId: ID!) {
+            getAccount(  
+                providerId: $providerId,
+                accountId: $accountId) {
+            ... on AccountNotFound {
+            errorMessage
+            providerId
+            errorCode
+            accountId
+            }
+            ... on Account {
+            id
+            customData
+            providerId
+            balance {
+                customData
+                value
+                version
+            }
+                    activePlanVersions{
+                        from
+                        to
+                        planVersion{
+                            id
+                            version
+                planServices{
+                                balanceName
+                            }
+                        }
+                    }
+                    archivedPlanVersions{
+                        from
+                        to
+                        planVersion{
+                            id
+                            version
+                planServices{
+                                balanceName
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        """
+    )
+    params = {
+        "providerId": provider_id,
+        "accountId": account_id
+    }
+    
+    result = await gql_client.execute_async(query, variable_values=params)
+    balance_json_str = result['getAccount']['balance']['customData']
+    balance = json.loads(balance_json_str)
+    data = balance['balance']['data']
+
+    return int(data['total'])
 
 async def main():
     all_samples = []
@@ -163,6 +245,11 @@ async def main():
     terminate_txn_samples = []
 
     access_token = await get_token()
+    gql_client = get_gql_client(access_token)
+    start_balance = await get_balance(gql_client)
+    print(f"Starting balance = {start_balance}")
+    last_balance = start_balance
+
     num_errors = 0
 
     for i in range(0, num_sessions):
@@ -190,13 +277,18 @@ async def main():
         terminate_txn_samples.append(all_samples[-1])
         if status_code >= 400:
             num_errors += 1
+        last_balance = await get_balance(gql_client)
+        print(f"New balance = {last_balance}")
 
-    print_array_summary("Start Transactions", start_txn_samples)
-    print_array_summary("Update Transactions", update_txn_samples)
-    print_array_summary("Terminate Transactions", terminate_txn_samples)
-    print_array_summary("All Transactions", all_samples)
-    print(f"Error count: {num_errors}")
-    print(f"Error rate: {num_errors / len(all_samples)}")
+    if len(all_samples) > 0:
+        print_array_summary("Start Transactions", start_txn_samples)
+        print_array_summary("Update Transactions", update_txn_samples)
+        print_array_summary("Terminate Transactions", terminate_txn_samples)
+        print_array_summary("All Transactions", all_samples)
+        print(f"Error count: {num_errors}")
+        print(f"Error rate: {num_errors / len(all_samples)}")
+        print(f"Start balance = {start_balance}, End balance = {last_balance}, Delta = {last_balance - start_balance}")
+        
 
 def print_array_summary(label, all_samples):
     # convert nanoseconds to milliseconds
