@@ -11,7 +11,7 @@ from gql.transport.aiohttp import AIOHTTPTransport
 import numpy as np
 s = httpx.AsyncClient(http2=True, verify=False)
 
-base_url = "https://mwcl3useast1-lb-0-1783933148.us-east-1.elb.amazonaws.com"
+base_url = environ['TOTOGI_URL']
 device_id = "ede7914e-4055-4484-9652-da46802266c2"
 account_id = "ede7914e-4055-4484-9652-da46802266c2"
 provider_id = "fc397a41-7bc8-3fa3-971b-2686c0d77c2f"
