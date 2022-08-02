@@ -47,6 +47,7 @@ git clone https://github.com/totogi/latency-test.git
 ```shell
 export TOTOGI_USERNAME="infra-user@domain.com"
 export TOTOGI_PASSWORD="infraPassword"
+export TOTOGI_URL="https://Your.5GURL"
 ```
 
 9. Install requirements
